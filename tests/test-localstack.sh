@@ -16,14 +16,15 @@ TEST_TEAM="test-team-local"
 echo "==> Starting LocalStack..."
 docker run -d --rm \
   --name localstack-test \
-  -p ${LOCALSTACK_PORT}:4566 \
+  -p 127.0.0.1:4566:4566 \
   -e SERVICES=s3,iam,sts \
+  -e LOCALSTACK_MODE=community \
   localstack/localstack
 
 # Wait for LocalStack to be ready
 echo "==> Waiting for LocalStack to be ready..."
 for i in {1..30}; do
-  if curl -sf http://localhost:${LOCALSTACK_PORT}/_localstack/health | grep -q '"s3": "available"'; then
+  if awslocal s3 ls > /dev/null 2>&1; then
     echo "    LocalStack ready."
     break
   fi
