@@ -1,0 +1,117 @@
+name: Test with LocalStack
+
+on:
+  pull_request:
+    paths:
+      - 'modules/**'
+      - 'platform/**'
+      - 'teams/**'
+
+jobs:
+  test:
+    name: Integration test (LocalStack)
+    runs-on: ubuntu-latest
+
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3,iam,sts
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Install terraform-local and awscli-local
+        run: pip install terraform-local awscli-local
+
+      - name: Create state bucket in LocalStack
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: awslocal s3 mb s3://tfstate-test
+
+      - name: Init (pointing to LocalStack)
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          tflocal -chdir=./platform init \
+            -backend-config="bucket=tfstate-test" \
+            -backend-config="key=teams/test-team/terraform.tfstate" \
+            -backend-config="region=us-east-1"
+
+      - name: Plan against LocalStack
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          tflocal -chdir=./platform plan \
+            -var="team_config_file=../teams/team-alpha.yaml" \
+            -var="environment=dev" \
+            -out=tfplan
+
+      - name: Apply against LocalStack
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          tflocal -chdir=./platform apply tfplan
+
+      - name: Verify resources
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          echo "==> Checking S3 buckets exist..."
+          awslocal s3 ls | grep "team-alpha"
+
+          echo "==> Checking IAM role exists..."
+          awslocal iam get-role --role-name "dev-team-alpha-role"
+
+          echo "==> Checking private bucket access block..."
+          BLOCK=$(awslocal s3api get-public-access-block --bucket "dev-team-alpha-data")
+          echo "$BLOCK"
+          echo "$BLOCK" | python3 -c "
+          import json,sys
+          b = json.load(sys.stdin)['PublicAccessBlockConfiguration']
+          assert b['BlockPublicAcls'] == True, 'BlockPublicAcls should be True for private bucket'
+          assert b['BlockPublicPolicy'] == True, 'BlockPublicPolicy should be True for private bucket'
+          print('PASS: Private bucket correctly blocked.')
+          "
+
+          echo "==> Checking IAM policy has no wildcard resources..."
+          POLICY=$(awslocal iam get-role-policy \
+            --role-name "dev-team-alpha-role" \
+            --policy-name "dev-team-alpha-s3-policy" \
+            --query 'PolicyDocument' --output text)
+          if echo "$POLICY" | python3 -c "
+          import json,sys
+          doc = json.loads(sys.stdin.read())
+          for stmt in doc['Statement']:
+              res = stmt.get('Resource', [])
+              if isinstance(res, str): res = [res]
+              for r in res:
+                  if r == '*':
+                      print('FAIL: Wildcard resource found in IAM policy')
+                      sys.exit(1)
+          print('PASS: No wildcard resources in IAM policy.')
+          "; then
+            echo "IAM policy check passed."
+          fi

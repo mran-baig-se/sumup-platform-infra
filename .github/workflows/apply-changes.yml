@@ -1,0 +1,116 @@
+name: Apply team changes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'teams/**.yaml'
+
+env:
+  AWS_REGION: eu-west-1
+  TFSTATE_BUCKET: company-tfstate
+  ENVIRONMENT: prod
+
+jobs:
+  detect:
+    name: Detect changed teams
+    runs-on: ubuntu-latest
+    outputs:
+      changed_teams: ${{ steps.detect.outputs.teams }}
+      deleted_teams: ${{ steps.detect.outputs.deleted }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need previous commit to diff against
+
+      - name: Detect changed and deleted team files
+        id: detect
+        run: |
+          # Files changed or added
+          CHANGED=$(git diff --name-only --diff-filter=ACM HEAD~1 HEAD -- 'teams/*.yaml' \
+            | sed 's|teams/||;s|\.yaml||' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          # Files deleted — these need destroy
+          DELETED=$(git diff --name-only --diff-filter=D HEAD~1 HEAD -- 'teams/*.yaml' \
+            | sed 's|teams/||;s|\.yaml||' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "Changed teams: $CHANGED"
+          echo "Deleted teams: $DELETED"
+          echo "teams=$CHANGED" >> $GITHUB_OUTPUT
+          echo "deleted=$DELETED" >> $GITHUB_OUTPUT
+
+  apply:
+    name: Apply — ${{ matrix.team }}
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.changed_teams != '[]'
+    strategy:
+      # Each team runs in parallel — isolated state means no conflicts
+      matrix:
+        team: ${{ fromJson(needs.detect.outputs.changed_teams) }}
+      fail-fast: false  # Don't cancel other teams if one fails
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Apply team resources
+        run: |
+          chmod +x ./scripts/apply-team.sh
+          ./scripts/apply-team.sh "${{ matrix.team }}" apply
+        env:
+          ENVIRONMENT: ${{ env.ENVIRONMENT }}
+          TFSTATE_BUCKET: ${{ env.TFSTATE_BUCKET }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+
+  offboard:
+    name: Offboard — ${{ matrix.team }}
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.deleted_teams != '[]'
+    strategy:
+      matrix:
+        team: ${{ fromJson(needs.detect.outputs.deleted_teams) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Re-create a minimal YAML so Terraform can read it for destroy
+      - name: Restore minimal team config for destroy
+        run: |
+          TEAM="${{ matrix.team }}"
+          # Get last known config from git history
+          git show HEAD~1:teams/${TEAM}.yaml > teams/${TEAM}.yaml
+
+      - name: Destroy team resources
+        run: |
+          chmod +x ./scripts/apply-team.sh
+          ./scripts/apply-team.sh "${{ matrix.team }}" destroy
+        env:
+          ENVIRONMENT: ${{ env.ENVIRONMENT }}
+          TFSTATE_BUCKET: ${{ env.TFSTATE_BUCKET }}
+          AWS_REGION: ${{ env.AWS_REGION }}

@@ -1,0 +1,6 @@
+team_name: team-beta
+buckets:
+  - name: raw-data
+    visibility: private
+  - name: processed
+    visibility: private

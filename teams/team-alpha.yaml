@@ -1,0 +1,11 @@
+# Team Alpha owns this file. Edit and commit to change your AWS resources.
+# Adding a bucket: add an entry to the list below with explicit visibility.
+# Removing a bucket: remove the entry — CI will destroy it after confirmation.
+team_name: team-alpha
+buckets:
+  - name: data
+    visibility: private
+  - name: artifacts
+    visibility: private
+  - name: public-assets
+    visibility: public

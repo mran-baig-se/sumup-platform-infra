@@ -1,0 +1,86 @@
+name: Validate
+
+on:
+  pull_request:
+    paths:
+      - 'teams/**'
+      - 'modules/**'
+      - 'platform/**'
+
+jobs:
+  validate:
+    name: Terraform validate + lint + security
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      # ── Format check ──────────────────────────────────────────────────────
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      # ── Validate module (no AWS needed — backend=false skips state init) ──
+      - name: Validate module
+        run: |
+          terraform -chdir=./modules/team-resources init -backend=false
+          terraform -chdir=./modules/team-resources validate
+
+      # ── tflint ────────────────────────────────────────────────────────────
+      - name: Setup tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.50.3
+
+      - name: Run tflint
+        run: tflint --recursive
+
+      # ── Checkov security scan ─────────────────────────────────────────────
+      - name: Checkov security scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: modules/
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+      # ── Validate all team YAML files ──────────────────────────────────────
+      - name: Validate team YAML schemas
+        run: |
+          python3 - <<'EOF'
+          import yaml, sys, os, re
+
+          errors = []
+          teams_dir = "teams"
+
+          for fname in os.listdir(teams_dir):
+              if not fname.endswith(".yaml"):
+                  continue
+              path = os.path.join(teams_dir, fname)
+              with open(path) as f:
+                  config = yaml.safe_load(f)
+
+              team = config.get("team_name", "")
+              if not re.match(r'^[a-z][a-z0-9-]{2,29}$', team):
+                  errors.append(f"{fname}: invalid team_name '{team}'")
+
+              buckets = config.get("buckets", [])
+              if not buckets:
+                  errors.append(f"{fname}: no buckets defined")
+
+              for b in buckets:
+                  if b.get("visibility") not in ("public", "private"):
+                      errors.append(f"{fname}: bucket '{b.get('name')}' has invalid visibility '{b.get('visibility')}'")
+
+          if errors:
+              print("YAML validation errors:")
+              for e in errors:
+                  print(f"  ✗ {e}")
+              sys.exit(1)
+          else:
+              print(f"✓ All {len(os.listdir(teams_dir))} team YAML files valid")
+          EOF
