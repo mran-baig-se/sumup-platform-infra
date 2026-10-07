@@ -62,9 +62,12 @@ jobs:
                   continue
               with open(os.path.join(teams_dir, fname)) as f:
                   config = yaml.safe_load(f)
+              if not config:
+                  errors.append(f"{fname}: empty or invalid YAML")
+                  continue
               team = config.get("team_name", "")
               if not re.match(r'^[a-z][a-z0-9-]{2,29}$', team):
-                  errors.append(f"{fname}: invalid team_name")
+                  errors.append(f"{fname}: invalid team_name '{team}'")
               for b in config.get("buckets", []):
                   if b.get("visibility") not in ("public", "private"):
                       errors.append(f"{fname}: invalid visibility")
