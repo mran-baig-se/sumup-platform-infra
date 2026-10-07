@@ -14,9 +14,3 @@ variable "aws_region" {
   type        = string
   default     = "eu-west-1"
 }
-
-variable "tfstate_bucket" {
-  description = "S3 bucket name for Terraform state storage."
-  type        = string
-  default     = "company-tfstate"
-}
