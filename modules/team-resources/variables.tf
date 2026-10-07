@@ -39,7 +39,7 @@ variable "buckets" {
   }
 
   validation {
-    condition = length(var.buckets) == length(distinct([for b in var.buckets : b.name]))
+    condition     = length(var.buckets) == length(distinct([for b in var.buckets : b.name]))
     error_message = "Bucket names within a team must be unique."
   }
 }

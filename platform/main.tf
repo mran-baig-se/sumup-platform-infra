@@ -41,8 +41,8 @@ module "team_resources" {
 output "team_outputs" {
   description = "Resources provisioned for this team."
   value = {
-    role_arn        = module.team_resources.team_role_arn
-    buckets         = module.team_resources.bucket_names
-    public_buckets  = module.team_resources.public_buckets
+    role_arn       = module.team_resources.team_role_arn
+    buckets        = module.team_resources.bucket_names
+    public_buckets = module.team_resources.public_buckets
   }
 }
