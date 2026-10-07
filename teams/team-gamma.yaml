@@ -1,0 +1,6 @@
+team_name: team-gamma
+buckets:
+  - name: reports
+    visibility: private
+  - name: exports
+    visibility: private
